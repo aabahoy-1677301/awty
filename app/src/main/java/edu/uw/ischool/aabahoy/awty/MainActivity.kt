@@ -4,8 +4,10 @@ import android.annotation.SuppressLint
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.*
+import android.content.pm.PackageManager
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
+import android.telephony.SmsManager
 import android.util.Log
 import android.widget.Button
 import android.widget.EditText
@@ -25,7 +27,11 @@ class IntentListener : BroadcastReceiver() {
         Log.i("BroadcastReceiver", "Created BroadcastReceiver")
     }
     override fun onReceive(p0: Context?, p1: Intent?) {
-        Toast.makeText(p0, "${p1?.getStringExtra("phone")}:Are we there yet?", Toast.LENGTH_LONG).show()
+        val smsMgr = SmsManager.getDefault()
+        val msg = p1?.getStringExtra("msg").toString()
+        val dest = p1?.getStringExtra("phone")?.replace("[\\D]".toRegex(), "").toString()
+        Log.i("BroadcastReceiver", dest)
+        smsMgr?.sendTextMessage(dest, null, msg, null, null)
         Log.i("BroadcastReceiver", "${p1?.getStringExtra("phone")}   $interval")
         alarmManager.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + interval, pendingIntent)
     }
@@ -33,7 +39,7 @@ class IntentListener : BroadcastReceiver() {
 
 class MainActivity : AppCompatActivity() {
 
-    @SuppressLint("ScheduleExactAlarm")
+    @SuppressLint("ScheduleExactAlarm", "UnspecifiedImmutableFlag")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -71,34 +77,42 @@ class MainActivity : AppCompatActivity() {
             val phone = findViewById<EditText>(R.id.phoneInput).text
             val min = findViewById<EditText>(R.id.timeInput).text
 
-            if (btn.text == "Start") {
-                if (msg.isEmpty()) {
-                    Toast.makeText(this, R.string.form_alert_msg, Toast.LENGTH_SHORT).show()
-                } else if (!phone.matches(("^[+]?[0-9]{10}$".toRegex()))) {
-                    Toast.makeText(this, R.string.form_alert_phone, Toast.LENGTH_SHORT).show()
-                } else if (min.isEmpty() || min.toString().toInt() <= 0) {
-                    Toast.makeText(this, R.string.form_alert_time, Toast.LENGTH_SHORT).show()
-                } else {
-                    btn.text = getString(R.string.stop)
+            when {
+                checkSelfPermission("android.permission.SEND_SMS") == PackageManager.PERMISSION_GRANTED -> {
+                    if (btn.text == "Start") {
+                        if (msg.isEmpty()) {
+                            Toast.makeText(this, R.string.form_alert_msg, Toast.LENGTH_SHORT).show()
+                        } else if (!phone.matches(("^[+]?[0-9]{10}$".toRegex()))) {
+                            Toast.makeText(this, R.string.form_alert_phone, Toast.LENGTH_SHORT).show()
+                        } else if (min.isEmpty() || min.toString().toInt() <= 0) {
+                            Toast.makeText(this, R.string.form_alert_time, Toast.LENGTH_SHORT).show()
+                        } else {
+                            btn.text = getString(R.string.stop)
 
-                    val formattedPhone = "(" + phone.subSequence(0, 3) + ") " + phone.subSequence(3, 6) + "-" + phone.subSequence(6,10)
-                    interval = min.toString().toLong() * 1000 * 60
-                    Log.i("BroadcastReceiver", interval.toString())
+                            val formattedPhone = "(" + phone.subSequence(0, 3) + ") " + phone.subSequence(3, 6) + "-" + phone.subSequence(6,10)
+                            interval = min.toString().toLong() * 1000 * 60
+                            Log.i("BroadcastReceiver", interval.toString())
 
-                    intFilter.addAction(formattedPhone)
-                    Log.i("BroadcastReceiver", "Set intent")
-                    alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-                    val intent = Intent(this, IntentListener::class.java)
-                    intent.putExtra("phone", formattedPhone)
-                    intent.putExtra("interval", interval.toString())
-                    pendingIntent = PendingIntent.getBroadcast(this, 0, intent,
-                        PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + interval, pendingIntent)
-                    Log.i("BroadcastReceiver", "Set alarm")
+                            intFilter.addAction(formattedPhone)
+                            Log.i("BroadcastReceiver", "Set intent")
+                            alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                            val intent = Intent(this, IntentListener::class.java)
+                            intent.putExtra("phone", formattedPhone)
+                            intent.putExtra("msg", msg.toString())
+                            intent.putExtra("interval", interval.toString())
+                            pendingIntent = PendingIntent.getBroadcast(this, 0, intent, PendingIntent.FLAG_CANCEL_CURRENT)
+                            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis(), pendingIntent)
+                            Log.i("BroadcastReceiver", "Set alarm")
+                        }
+                    } else {
+                        btn.text = getString(R.string.start)
+                        alarmManager.cancel(pendingIntent)
+                    }
                 }
-            } else {
-                btn.text = getString(R.string.start)
-                alarmManager.cancel(pendingIntent)
+                else -> {
+                    Log.i("BroadcastReceiver", "Permission requested")
+                    requestPermissions(arrayOf("android.permission.SEND_SMS"), 0)
+                }
             }
         }
     }
@@ -142,5 +156,58 @@ class MainActivity : AppCompatActivity() {
         findViewById<EditText>(R.id.msgInput).setText(msgState)
         findViewById<EditText>(R.id.phoneInput).setText(phoneState)
         findViewById<EditText>(R.id.timeInput).setText(minState)
+    }
+    @SuppressLint("UnspecifiedImmutableFlag", "ScheduleExactAlarm")
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        val btn = findViewById<Button>(R.id.statusBtn)
+        val msg = findViewById<EditText>(R.id.msgInput).text
+        val phone = findViewById<EditText>(R.id.phoneInput).text
+        val min = findViewById<EditText>(R.id.timeInput).text
+        val receiver = IntentListener()
+        val intFilter = IntentFilter()
+        registerReceiver(receiver, intFilter)
+
+        when (requestCode) {
+            0 -> {
+                if ((grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
+                    if (btn.text == "Start") {
+                        if (msg.isEmpty()) {
+                            Toast.makeText(this, R.string.form_alert_msg, Toast.LENGTH_SHORT).show()
+                        } else if (!phone.matches(("^[+]?[0-9]{10}$".toRegex()))) {
+                            Toast.makeText(this, R.string.form_alert_phone, Toast.LENGTH_SHORT).show()
+                        } else if (min.isEmpty() || min.toString().toInt() <= 0) {
+                            Toast.makeText(this, R.string.form_alert_time, Toast.LENGTH_SHORT).show()
+                        } else {
+                            btn.text = getString(R.string.stop)
+
+                            val formattedPhone = "(" + phone.subSequence(0, 3) + ") " + phone.subSequence(3, 6) + "-" + phone.subSequence(6,10)
+                            interval = min.toString().toLong() * 1000 * 60
+                            Log.i("BroadcastReceiver", interval.toString())
+
+                            intFilter.addAction(formattedPhone)
+                            Log.i("BroadcastReceiver", "Set intent")
+                            alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                            val intent = Intent(this, IntentListener::class.java)
+                            intent.putExtra("phone", formattedPhone)
+                            intent.putExtra("msg", msg.toString())
+                            intent.putExtra("interval", interval.toString())
+                            pendingIntent = PendingIntent.getBroadcast(this, 0, intent, PendingIntent.FLAG_CANCEL_CURRENT)
+                            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis(), pendingIntent)
+                            Log.i("BroadcastReceiver", "Set alarm")
+                        }
+                    } else {
+                        btn.text = getString(R.string.start)
+                        alarmManager.cancel(pendingIntent)
+                    }
+                } else {
+                    Log.i("BroadcastReceiver", "User did not give permission to send")
+                }
+            }
+        }
     }
 }
